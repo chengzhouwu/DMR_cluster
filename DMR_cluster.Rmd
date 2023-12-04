@@ -1,7 +1,7 @@
 ---
-title: "DMR_cluster"
-author: "Chengzhou"
-date: '2022'
+title: "Candidate DMR cluster"
+author: "Chengzhou Wu"
+date: '2023'
 output: html_document
 ---
 
@@ -15,113 +15,75 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r warning=FALSE,message=FALSE}
 library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
-library(minfi)
-library(geograbi) 
-library(limma)
-library(corrplot)
+library(gbdmr)
 ```
 
 ## Function 
 
-Define a function:
-
-input: x, y are both n by p matrices 
-
-output: a vector of length p indicating the column-wise correlation between x and y.
-
+Load the functiotions in the R package gbdmr 
 
 ```{r}
-colCors = function(x, y) {
-        sqr = function(x) x*x
-        if(!is.matrix(x)||!is.matrix(y)||any(dim(x)!=dim(y)))
-                stop("Please supply two matrices of equal size.")
-        x   = sweep(x, 2, colMeans(x))
-        y   = sweep(y, 2, colMeans(y))
-        cor = colSums(x*y) /  sqrt(colSums(sqr(x))*colSums(sqr(y)))
-        return(cor)
-}
+source("src_samebeta_ver2.R")
 ```
 
 ```{r}
+# load your data and the data is a matrix where columns are samples and rows correspond to the sites
 load('beta.Rdata')
-t.beta <- t(beta) 
+beta <- as.matrix(beta)  
+cor.threshold=0.5 # the threshold to define the adjacent correlation 
+
+
 ```
-## preprocess the variables 
 
-short the long row name of t.beta to identify with samples and vars
-
-```{r}
-rownames(t.beta) <- substring(rownames(t.beta),1,10)
-colnames(beta) <- substring(colnames(beta),1,10)
-
-
-#get the map information for CpG sites 
-map.data.subset <- getAnnotation(IlluminaHumanMethylation450kanno.ilmn12.hg19)
-colnames(map.data.subset)
-#delete X and Y since our data delete the chr X and Chr Y 
-map.data.subset = map.data.subset[map.data.subset$chr!='chrY'&map.data.subset$chr!='chrX',] 
-map.data.subset <-map.data.subset$chr[map.data.subset$Name %in% rownames(beta)]
-table(map.data.subset)
-
-Z1 <- t.beta
-dim(Z1)
-```
 ## get the cluster information 
 
 ```{r}
-start.loc.B=c()
-end.loc.B=c()
-count=0
-for (chr.num in names(table((map.data.subset)))){
-        count=count+1
-        tbl=table((map.data.subset))
-        
-        which(names(tbl)==chr.num)
-        index=(cumsum(tbl)[count]-tbl[count]+1):cumsum(tbl)[count]
-        
-        
-        record_cor=colCors(Z1[,index[-length(index)]],Z1[,index[-1]])
-        
-        
-        consecutive.table=rle(as.integer(record_cor>0.5))
-        block.len=consecutive.table[[1]]
-        block.val=consecutive.table[[2]]
-        
-        temp.loc=1:length(index)
-        temp.block.start=rep(0,sum(block.val==1,na.rm=T))
-        temp.block.end=rep(0,sum(block.val==1,na.rm=T))
-        for (i in 1:sum(block.val==1,na.rm = T)){
-                temp.block.start[i]=(cumsum(block.len)[block.val==1]-block.len[block.val==1]+1)[i]
-                temp.block.end[i]=cumsum(block.len)[block.val==1][i]+1
-                
-        }
-        
-        temp.start.loc.B=1:length(index)
-        temp.end.loc.B=1:length(index)
-        if (sum(block.val==1,na.rm = T)>0){
-                for (i in 1:sum(block.val==1,na.rm = T)){
-                        temp.start.loc.B[temp.block.start[i]:temp.block.end[i]]=temp.block.start[i]
-                        temp.end.loc.B[temp.block.start[i]:temp.block.end[i]]=temp.block.end[i]
-                }
-                temp.start.loc.B=unique(temp.start.loc.B)
-                temp.end.loc.B=unique(temp.end.loc.B)
-        }
-        
-        
-        if (count==1){
-                start.loc.B=temp.start.loc.B
-                end.loc.B=temp.end.loc.B
-        }else{
-                start.loc.B=c(start.loc.B,temp.start.loc.B+cumsum(tbl)[count-1])
-                end.loc.B=c(end.loc.B,temp.end.loc.B+cumsum(tbl)[count-1])
-        }
-        
+
+
+#construct an annotation data frame
+data(list="IlluminaHumanMethylation450kanno.ilmn12.hg19")
+data(Locations)
+data(Other)
+
+annotation <- cbind(as.data.frame(Locations), as.data.frame(Other))
+
+# add the annotation to the stats object 
+common <- intersect(rownames(beta), rownames(annotation))
+length(common)
+dim(beta)
+annotation <- annotation[match(common, rownames(annotation)),]
+beta <- beta[match(common, rownames(beta)),]
+t.beta <- t(beta)
+
+chr=annotation$chr
+pos=annotation$pos
+Indexes <- split(1:length(chr),chr)
+clusterIDs=rep(NA,length(chr))
+LAST=0
+for (i in seq(along=Indexes)){
+  Index <- Indexes[[i]]
+  temp <- pos[Index]
+  Index <- Index[order(temp)]
+  x=colCors(t.beta[,Index[-length(Index)]],t.beta[,Index[-1]])
+  y <- as.numeric(x <= cor.threshold)
+  z <- cumsum(c(1, y))
+  clusterIDs[Index] <- z + LAST
+  LAST <- max(z) + LAST
 }
+#clusterIDs # which cluster the cpg belongs
+sum(table(clusterIDs))
+table(table(clusterIDs))
 
-table(end.loc.B-start.loc.B+1)
-total_compare_LR <- sum(table(end.loc.B-start.loc.B+1))
 
-L.vec <- as.numeric(names(table(end.loc.B-start.loc.B+1)))
-length(L.vec)
+# Data
+blocksize <- c(1, 2, 3, 4, 5, 6, 7, 12)
+counts <- c(743, 54, 26, 9, 2, 1, 1, 1)
+
+# Create a data frame
+df <- data.frame(value = rep(blocksize, counts))
+
+# Plot histogram
+hist(df$value, breaks = seq(0.5, max(df$value) + 0.5, by = 1), col = "skyblue", main = "Histogram Plot", xlab = "Size", ylab = "Frequency")
+
 ```
 
