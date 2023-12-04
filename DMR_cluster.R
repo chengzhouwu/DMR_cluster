@@ -1,1 +1,1 @@
-# refer the Rmd file
+# refer to the Rmd file
